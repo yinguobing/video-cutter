@@ -497,7 +497,9 @@ impl eframe::App for DnClipApp {
                         .clamping(egui::SliderClamping::Always)
                         .show_value(false)
                         .trailing_fill(true);
-                    let resp = ui.add_sized([ui.available_width(), 0.0], slider);
+                    // Allocate full width explicitly (bottom_up needs explicit sizing)
+                    let full_w = ui.max_rect().width();
+                    let resp = ui.add_sized([full_w, ui.spacing().interact_size.y], slider);
                     if resp.changed() { let _ = self.player.seek(self.current_time); }
                     if let (Some(in_pt), Some(out_pt)) = (self.project.in_point, self.project.out_point) {
                         let r = resp.rect;
