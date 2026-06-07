@@ -418,193 +418,196 @@ impl eframe::App for DnClipApp {
                 }
             });
 
-        // ── Bottom control bar ──
-        egui::TopBottomPanel::bottom("controls").show(ctx, |ui| {
-            if let Some(info) = &self.project.video_info {
-                let total_dur = info.duration;
-                if total_dur > 0.0 {
-                    // Time + fps row
-                    ui.horizontal(|ui| {
-                        ui.label(Self::format_time(self.current_time));
-                        ui.label(format!(" / {}", Self::format_time(total_dur)));
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(format!("{:.3} fps", info.fps));
-                        });
-                    });
-
-                    // Timeline slider — full width
-                    let slider = egui::Slider::new(&mut self.current_time, 0.0..=total_dur as f64)
-                        .clamping(egui::SliderClamping::Always)
-                        .show_value(false)
-                        .trailing_fill(true);
-                    let resp = ui.add_sized([ui.available_width(), 0.0], slider);
-
-                    if resp.changed() {
-                        let _ = self.player.seek(self.current_time);
-                    }
-
-                    // Segment highlight
-                    if let (Some(in_pt), Some(out_pt)) = (self.project.in_point, self.project.out_point) {
-                        let r = resp.rect;
-                        let frac_in = (in_pt / total_dur).clamp(0.0, 1.0) as f32;
-                        let frac_out = (out_pt / total_dur).clamp(0.0, 1.0) as f32;
-                        let x_in = r.left() + frac_in * r.width();
-                        let x_out = r.left() + frac_out * r.width();
-                        ui.painter().rect_filled(
-                            egui::Rect::from_min_max(
-                                egui::pos2(x_in, r.bottom() + 2.0),
-                                egui::pos2(x_out, r.bottom() + 6.0),
-                            ),
-                            egui::CornerRadius::same(2),
-                            egui::Color32::from_rgb(0, 180, 255),
-                        );
-                    }
-
-                    // I/O + Playback in one row
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 4.0;
-
-                        if ui.button("⏮").clicked() {
-                            let _ = self.player.seek_relative(-30.0);
-                        }
-                        if ui.button("◀◀").clicked() {
-                            let _ = self.player.seek_relative(-5.0);
-                        }
-
-                        let play_label = if self.paused { "▶" } else { "⏸" };
-                        if ui.button(play_label).clicked() {
-                            let _ = self.player.toggle_pause();
-                            self.paused = !self.paused;
-                        }
-
-                        if ui.button("▶▶").clicked() {
-                            let _ = self.player.seek_relative(5.0);
-                        }
-                        if ui.button("⏭").clicked() {
-                            let _ = self.player.seek_relative(30.0);
-                        }
-
-                        if ui.button("◀F").clicked() {
-                            let _ = self.player.frame_step(false);
-                            if let Ok(t) = self.player.get_time_pos() {
-                                self.current_time = t;
-                            }
-                        }
-                        if ui.button("F▶").clicked() {
-                            let _ = self.player.frame_step(true);
-                            if let Ok(t) = self.player.get_time_pos() {
-                                self.current_time = t;
-                            }
-                        }
-
-                        ui.separator();
-
-                        if ui.button("I").clicked() {
-                            self.project.in_point = Some(self.current_time);
-                        }
-                        ui.label(format!("IN:{}", Self::format_time(self.project.in_point.unwrap_or(0.0))));
-
-                        if ui.button("O").clicked() {
-                            self.project.out_point = Some(self.current_time);
-                        }
-                        ui.label(format!("OUT:{}", Self::format_time(self.project.out_point.unwrap_or(0.0))));
-
-                        if let Some(dur) = self.project.segment_duration() {
-                            ui.label(format!("Dur:{}", Self::format_time(dur)));
-                        }
-
-                        if self.project.in_point.is_some() || self.project.out_point.is_some() {
-                            if ui.button("✕").clicked() {
-                                self.project.in_point = None;
-                                self.project.out_point = None;
-                            }
-                        }
-                    });
-                }
-            } else {
-                ui.label("No file loaded");
-            }
-        });
-
-        // ── Main content: preview fills all remaining space ──
+        // ── Main content: preview top, controls bottom ──
         egui::CentralPanel::default().show(ctx, |ui| {
-            egui::Frame::dark_canvas(ui.style()).show(ui, |ui| {
-                let avail = ui.available_size();
-                // Maximize preview while keeping 16:9 ratio
-                let (preview_w, preview_h) = if avail.y > avail.x * 0.5625 {
-                    (avail.x, avail.x * 0.5625)
-                } else {
-                    (avail.y / 0.5625, avail.y)
-                };
-                let preview_size = egui::vec2(preview_w, preview_h);
-                ui.centered_and_justified(|ui| {
-                    let (rect, _) = ui.allocate_exact_size(preview_size, egui::Sense::hover());
-                    self.preview_rect = Some(rect);
+            // Extract values upfront to avoid borrow conflicts with closures
+            let total_dur = self.project.video_info.as_ref()
+                .map(|i| i.duration).unwrap_or(0.0);
+            let fps = self.project.video_info.as_ref()
+                .map(|i| i.fps).unwrap_or(0.0);
+            let has_video = self.project.video_info.is_some();
 
-                    ui.painter().rect_filled(
-                        rect,
-                        egui::CornerRadius::same(4),
-                        egui::Color32::from_rgb(20, 20, 30),
-                    );
+            ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                // Controls
+                if has_video && total_dur > 0.0 {
+                        // I/O + Playback in one row
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0;
 
-                    if self.player_ready {
-                        let time_text = Self::format_time(self.current_time);
-                        ui.painter().text(
-                            egui::pos2(rect.left() + 10.0, rect.top() + 10.0),
-                            egui::Align2::LEFT_TOP,
-                            &time_text,
-                            egui::FontId::monospace(18.0),
-                            egui::Color32::WHITE,
-                        );
-
-                        // IN/OUT marker lines
-                        let total_dur = self.project.video_info.as_ref()
-                            .map(|i| i.duration).unwrap_or(1.0);
-                        if total_dur > 0.0 {
-                            let bar_w = rect.width() - 20.0;
-                            let bar_x = rect.left() + 10.0;
-
-                            if let Some(in_pt) = self.project.in_point {
-                                let frac = (in_pt / total_dur).clamp(0.0, 1.0) as f32;
-                                let x = bar_x + frac * bar_w;
-                                ui.painter().line_segment(
-                                    [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-                                    egui::Stroke::new(2.0, egui::Color32::GREEN),
-                                );
-                                ui.painter().text(
-                                    egui::pos2(x, rect.top() + 5.0),
-                                    egui::Align2::CENTER_TOP,
-                                    "I",
-                                    egui::FontId::proportional(14.0),
-                                    egui::Color32::GREEN,
-                                );
+                            if ui.button("⏮").clicked() {
+                                let _ = self.player.seek_relative(-30.0);
+                            }
+                            if ui.button("◀◀").clicked() {
+                                let _ = self.player.seek_relative(-5.0);
                             }
 
-                            if let Some(out_pt) = self.project.out_point {
-                                let frac = (out_pt / total_dur).clamp(0.0, 1.0) as f32;
-                                let x = bar_x + frac * bar_w;
-                                ui.painter().line_segment(
-                                    [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-                                    egui::Stroke::new(2.0, egui::Color32::RED),
-                                );
-                                ui.painter().text(
-                                    egui::pos2(x, rect.top() + 5.0),
-                                    egui::Align2::CENTER_TOP,
-                                    "O",
-                                    egui::FontId::proportional(14.0),
-                                    egui::Color32::RED,
-                                );
+                            let play_label = if self.paused { "▶" } else { "⏸" };
+                            if ui.button(play_label).clicked() {
+                                let _ = self.player.toggle_pause();
+                                self.paused = !self.paused;
                             }
+
+                            if ui.button("▶▶").clicked() {
+                                let _ = self.player.seek_relative(5.0);
+                            }
+                            if ui.button("⏭").clicked() {
+                                let _ = self.player.seek_relative(30.0);
+                            }
+
+                            if ui.button("◀F").clicked() {
+                                let _ = self.player.frame_step(false);
+                                if let Ok(t) = self.player.get_time_pos() {
+                                    self.current_time = t;
+                                }
+                            }
+                            if ui.button("F▶").clicked() {
+                                let _ = self.player.frame_step(true);
+                                if let Ok(t) = self.player.get_time_pos() {
+                                    self.current_time = t;
+                                }
+                            }
+
+                            ui.separator();
+
+                            if ui.button("I").clicked() {
+                                self.project.in_point = Some(self.current_time);
+                            }
+                            ui.label(format!("IN:{}", Self::format_time(self.project.in_point.unwrap_or(0.0))));
+
+                            if ui.button("O").clicked() {
+                                self.project.out_point = Some(self.current_time);
+                            }
+                            ui.label(format!("OUT:{}", Self::format_time(self.project.out_point.unwrap_or(0.0))));
+
+                            if let Some(dur) = self.project.segment_duration() {
+                                ui.label(format!("Dur:{}", Self::format_time(dur)));
+                            }
+
+                            if self.project.in_point.is_some() || self.project.out_point.is_some() {
+                                if ui.button("✕").clicked() {
+                                    self.project.in_point = None;
+                                    self.project.out_point = None;
+                                }
+                            }
+                        });
+
+                        // Timeline slider — full width
+                        let slider = egui::Slider::new(&mut self.current_time, 0.0..=total_dur as f64)
+                            .clamping(egui::SliderClamping::Always)
+                            .show_value(false)
+                            .trailing_fill(true);
+                        let resp = ui.add_sized([ui.available_width(), 0.0], slider);
+
+                        if resp.changed() {
+                            let _ = self.player.seek(self.current_time);
                         }
+
+                        // Segment highlight below slider
+                        if let (Some(in_pt), Some(out_pt)) = (self.project.in_point, self.project.out_point) {
+                            let r = resp.rect;
+                            let frac_in = (in_pt / total_dur).clamp(0.0, 1.0) as f32;
+                            let frac_out = (out_pt / total_dur).clamp(0.0, 1.0) as f32;
+                            let x_in = r.left() + frac_in * r.width();
+                            let x_out = r.left() + frac_out * r.width();
+                            ui.painter().rect_filled(
+                                egui::Rect::from_min_max(
+                                    egui::pos2(x_in, r.bottom() + 2.0),
+                                    egui::pos2(x_out, r.bottom() + 6.0),
+                                ),
+                                egui::CornerRadius::same(2),
+                                egui::Color32::from_rgb(0, 180, 255),
+                            );
+                        }
+
+                        // Time + fps display
+                        ui.horizontal(|ui| {
+                            ui.label(Self::format_time(self.current_time));
+                            ui.label(format!(" / {}", Self::format_time(total_dur)));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.label(format!("{:.3} fps", fps));
+                            });
+                        });
+                }
+
+                ui.separator();
+
+                // Preview area: fills remaining space
+                egui::Frame::dark_canvas(ui.style()).show(ui, |ui| {
+                    let avail = ui.available_size();
+                    let (preview_w, preview_h) = if avail.y > avail.x * 0.5625 {
+                        (avail.x, avail.x * 0.5625)
                     } else {
-                        ui.painter().text(
-                            rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            "Drop a video file or use Ctrl+O to open",
-                            egui::FontId::proportional(18.0),
-                            egui::Color32::GRAY,
+                        (avail.y / 0.5625, avail.y)
+                    };
+                    let preview_size = egui::vec2(preview_w, preview_h);
+                    ui.centered_and_justified(|ui| {
+                        let (rect, _) = ui.allocate_exact_size(preview_size, egui::Sense::hover());
+                        self.preview_rect = Some(rect);
+
+                        ui.painter().rect_filled(
+                            rect,
+                            egui::CornerRadius::same(4),
+                            egui::Color32::from_rgb(20, 20, 30),
                         );
-                    }
+
+                        if self.player_ready {
+                            let time_text = Self::format_time(self.current_time);
+                            ui.painter().text(
+                                egui::pos2(rect.left() + 10.0, rect.top() + 10.0),
+                                egui::Align2::LEFT_TOP,
+                                &time_text,
+                                egui::FontId::monospace(18.0),
+                                egui::Color32::WHITE,
+                            );
+
+                            let total_dur = self.project.video_info.as_ref()
+                                .map(|i| i.duration).unwrap_or(1.0);
+                            if total_dur > 0.0 {
+                                let bar_w = rect.width() - 20.0;
+                                let bar_x = rect.left() + 10.0;
+
+                                if let Some(in_pt) = self.project.in_point {
+                                    let frac = (in_pt / total_dur).clamp(0.0, 1.0) as f32;
+                                    let x = bar_x + frac * bar_w;
+                                    ui.painter().line_segment(
+                                        [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                                        egui::Stroke::new(2.0, egui::Color32::GREEN),
+                                    );
+                                    ui.painter().text(
+                                        egui::pos2(x, rect.top() + 5.0),
+                                        egui::Align2::CENTER_TOP,
+                                        "I",
+                                        egui::FontId::proportional(14.0),
+                                        egui::Color32::GREEN,
+                                    );
+                                }
+
+                                if let Some(out_pt) = self.project.out_point {
+                                    let frac = (out_pt / total_dur).clamp(0.0, 1.0) as f32;
+                                    let x = bar_x + frac * bar_w;
+                                    ui.painter().line_segment(
+                                        [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                                        egui::Stroke::new(2.0, egui::Color32::RED),
+                                    );
+                                    ui.painter().text(
+                                        egui::pos2(x, rect.top() + 5.0),
+                                        egui::Align2::CENTER_TOP,
+                                        "O",
+                                        egui::FontId::proportional(14.0),
+                                        egui::Color32::RED,
+                                    );
+                                }
+                            }
+                        } else {
+                            ui.painter().text(
+                                rect.center(),
+                                egui::Align2::CENTER_CENTER,
+                                "Drop a video file or use Ctrl+O to open",
+                                egui::FontId::proportional(18.0),
+                                egui::Color32::GRAY,
+                            );
+                        }
+                    });
                 });
             });
         });
