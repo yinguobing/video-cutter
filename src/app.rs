@@ -70,22 +70,20 @@ impl DnClipApp {
 
         match self.player.get_duration() {
             Ok(d) => {
+                let fps = self.player.get_fps().unwrap_or(0.0);
                 let info = VideoInfo {
-                    width: 0,  // we'll get this later
+                    width: 0,
                     height: 0,
-                    fps: 0.0,
+                    fps,
                     duration: d,
                 };
                 // Try to get resolution
-                if let Ok((w, h)) = self.player.get_resolution() {
-                    self.project.video_info = Some(VideoInfo {
-                        width: w,
-                        height: h,
-                        ..info
-                    });
-                } else {
-                    self.project.video_info = Some(info);
-                }
+                let (w, h) = self.player.get_resolution().unwrap_or((0, 0));
+                self.project.video_info = Some(VideoInfo {
+                    width: w,
+                    height: h,
+                    ..info
+                });
             }
             Err(e) => {
                 self.export_status = format!("Failed to get video info: {}", e);

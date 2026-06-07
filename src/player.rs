@@ -258,6 +258,22 @@ impl MpvPlayer {
         val.as_f64().context("Failed to get duration from mpv")
     }
 
+    /// Get video FPS from container metadata.
+    /// Falls back to estimated FPS if container metadata is unavailable.
+    pub fn get_fps(&self) -> Result<f64> {
+        // Try container-fps first (most reliable for CFR content)
+        if let Ok(val) = self.get_property("container-fps") {
+            if let Some(fps) = val.as_f64() {
+                if fps > 0.0 {
+                    return Ok(fps);
+                }
+            }
+        }
+        // Fallback to estimated-vf-fps
+        let val = self.get_property("estimated-vf-fps")?;
+        val.as_f64().context("Failed to get FPS from mpv")
+    }
+
     /// Get video resolution.
     pub fn get_resolution(&self) -> Result<(u32, u32)> {
         let w = self
