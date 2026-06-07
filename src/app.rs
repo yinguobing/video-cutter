@@ -467,7 +467,7 @@ impl eframe::App for DnClipApp {
             let fps = self.project.video_info.as_ref().map(|i| i.fps).unwrap_or(0.0);
             let has_video = self.project.video_info.is_some();
 
-            ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+            ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
                 // Controls at the bottom
                 if has_video && total_dur > 0.0 {
                     ui.horizontal(|ui| {
@@ -498,7 +498,7 @@ impl eframe::App for DnClipApp {
                         .show_value(false)
                         .trailing_fill(true);
                     // Set slider width via egui's spacing system
-                    let slider_w = ui.max_rect().width() - ui.spacing().button_padding.x * 2.0;
+                    let slider_w = ui.max_rect().width();
                     ui.spacing_mut().slider_width = slider_w;
                     let resp = ui.add(slider);
                     if resp.changed() { let _ = self.player.seek(self.current_time); }
