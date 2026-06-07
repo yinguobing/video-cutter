@@ -886,8 +886,10 @@ dependencies = [
  "egui-file-dialog",
  "env_logger",
  "log",
+ "raw-window-handle",
  "serde",
  "serde_json",
+ "x11-dl",
 ]
 
 [[package]]

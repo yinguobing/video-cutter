@@ -1,5 +1,7 @@
 use eframe::egui;
 use egui_file_dialog::FileDialog;
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use crate::embed::EmbeddedWindow;
 use crate::player::MpvPlayer;
 use crate::types::{DnxProfile, Project, VideoInfo};
 use crate::export::{ExportJob, default_output_path};
@@ -8,6 +10,7 @@ use crate::export::{ExportJob, default_output_path};
 pub struct DnClipApp {
     project: Project,
     player: MpvPlayer,
+    embedded: EmbeddedWindow,
     // UI state
     paused: bool,
     current_time: f64,
@@ -15,6 +18,9 @@ pub struct DnClipApp {
     export_status: String,
     show_help: bool,
     file_dialog: FileDialog,
+    preview_rect: Option<egui::Rect>,
+    embedded_initialized: bool,
+    pending_open: Option<String>,
 }
 
 impl Default for DnClipApp {
@@ -31,12 +37,16 @@ impl Default for DnClipApp {
         Self {
             project: Project::default(),
             player: MpvPlayer::new(),
+            embedded: EmbeddedWindow::new(),
             paused: true,
             current_time: 0.0,
             player_ready: false,
             export_status: String::new(),
             show_help: false,
             file_dialog,
+            preview_rect: None,
+            embedded_initialized: false,
+            pending_open: None,
         }
     }
 }
@@ -58,12 +68,34 @@ impl DnClipApp {
     fn open_file(&mut self, path: &str) {
         // Stop current player if any
         self.player.stop();
+        self.embedded.destroy();
         self.player_ready = false;
         self.project = Project::default();
 
-        // Launch mpv standalone window
-        if let Err(e) = self.player.launch(path) {
+        // Try embedded launch first, fall back to standalone
+        let launch_result = if self.embedded_initialized {
+            if let Some(rect) = self.preview_rect {
+                // Use last-frame's preview rect (will be corrected next frame)
+                let ppp = 1.0; // approximate — will be fixed by reposition next frame
+                let child_x = (rect.min.x * ppp) as i32;
+                let child_y = (rect.min.y * ppp) as i32;
+                let child_w = (rect.width() * ppp) as u32;
+                let child_h = (rect.height() * ppp) as u32;
+                if let Some(child_xid) = self.embedded.create(child_x, child_y, child_w, child_h) {
+                    self.player.launch_embedded(path, child_xid)
+                } else {
+                    self.player.launch(path)
+                }
+            } else {
+                self.player.launch(path)
+            }
+        } else {
+            self.player.launch(path)
+        };
+
+        if let Err(e) = launch_result {
             self.export_status = format!("Error: {}", e);
+            self.embedded.destroy();
             return;
         }
         self.project.source_path = Some(std::path::PathBuf::from(path));
@@ -156,28 +188,52 @@ impl DnClipApp {
 }
 
 impl eframe::App for DnClipApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        // ── Embedded window init ──
+        if !self.embedded_initialized {
+            if let Ok(wh) = frame.window_handle() {
+                if let RawWindowHandle::Xlib(xwh) = wh.as_raw() {
+                    self.embedded.init(xwh.window);
+                    self.embedded_initialized = true;
+                    log::info!("Embedded window initialized, parent=0x{:x}", xwh.window);
+                }
+            }
+        }
+
+        // ── Reposition embedded window ──
+        // Child window coords are relative to parent, no screen offset needed.
+        if self.embedded.is_active() {
+            if let Some(rect) = self.preview_rect {
+                let ppp = ctx.pixels_per_point();
+                let x = (rect.min.x * ppp) as i32;
+                let y = (rect.min.y * ppp) as i32;
+                let w = (rect.width() * ppp) as u32;
+                let h = (rect.height() * ppp) as u32;
+                self.embedded.reposition(x, y, w, h);
+            }
+        }
+
         // ── File dialog ──
         self.file_dialog.update(ctx);
         if let Some(path) = self.file_dialog.take_picked() {
-            let path_str = path.to_string_lossy().to_string();
-            self.open_file(&path_str);
+            self.pending_open = Some(path.to_string_lossy().to_string());
         }
 
         // ── Drag-and-drop ──
-        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
-        for file in dropped {
-            if let Some(path) = file.path {
-                let valid_extensions = ["mp4", "mov", "mkv", "avi", "webm",
-                                        "mts", "m2ts", "ts", "flv", "wmv"];
-                if let Some(ext) = path.extension()
-                    .and_then(|e| e.to_str())
-                    .map(|e| e.to_lowercase())
-                {
-                    if valid_extensions.contains(&ext.as_str()) {
-                        let path_str = path.to_string_lossy().to_string();
-                        self.open_file(&path_str);
-                        break;
+        if self.pending_open.is_none() {
+            let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+            for file in dropped {
+                if let Some(path) = file.path {
+                    let valid_extensions = ["mp4", "mov", "mkv", "avi", "webm",
+                                            "mts", "m2ts", "ts", "flv", "wmv"];
+                    if let Some(ext) = path.extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| e.to_lowercase())
+                    {
+                        if valid_extensions.contains(&ext.as_str()) {
+                            self.pending_open = Some(path.to_string_lossy().to_string());
+                            break;
+                        }
                     }
                 }
             }
@@ -250,6 +306,9 @@ impl eframe::App for DnClipApp {
                     egui::Sense::hover(),
                 );
 
+                // Store for embedded window positioning
+                self.preview_rect = Some(rect);
+
                 ui.painter().rect_filled(
                     rect,
                     egui::CornerRadius::same(4),
@@ -307,11 +366,16 @@ impl eframe::App for DnClipApp {
                         }
                     }
 
-                    // Center text "mpv window is separate"
+                    // Center text
+                    let status_text = if self.embedded.is_active() {
+                        "🎬 Playing (embedded)"
+                    } else {
+                        "🎬 mpv playback window (separate)"
+                    };
                     ui.painter().text(
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
-                        "🎬 mpv playback window (separate)",
+                        status_text,
                         egui::FontId::proportional(16.0),
                         egui::Color32::GRAY,
                     );
@@ -474,6 +538,11 @@ impl eframe::App for DnClipApp {
                     });
                 });
         });
+
+        // ── Process deferred file open (after preview_rect is known) ──
+        if let Some(path) = self.pending_open.take() {
+            self.open_file(&path);
+        }
 
         // ── Keyboard shortcuts ──
         ctx.input_mut(|i| {

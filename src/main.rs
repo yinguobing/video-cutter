@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 
 mod app;
+mod embed;
 mod export;
 mod player;
 mod types;
