@@ -470,7 +470,7 @@ impl eframe::App for DnClipApp {
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
                 // Controls at the bottom
                 if has_video && total_dur > 0.0 {
-                    ui.centered_and_justified(|ui| {
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 4.0;
                             if ui.button("⏮").clicked() { let _ = self.player.seek_relative(-30.0); }
