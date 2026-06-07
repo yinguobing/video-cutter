@@ -1,4 +1,5 @@
 use eframe::egui;
+use egui_file_dialog::FileDialog;
 use crate::player::MpvPlayer;
 use crate::types::{DnxProfile, Project, VideoInfo};
 use crate::export::{ExportJob, default_output_path};
@@ -13,10 +14,20 @@ pub struct DnClipApp {
     player_ready: bool,
     export_status: String,
     show_help: bool,
+    file_dialog: FileDialog,
 }
 
 impl Default for DnClipApp {
     fn default() -> Self {
+        let file_dialog = FileDialog::default()
+            .initial_directory(std::env::current_dir().unwrap_or_default())
+            .add_file_filter_extensions(
+                "Video files",
+                vec!["mp4", "mov", "mkv", "avi", "webm",
+                     "mts", "m2ts", "ts", "flv", "wmv"],
+            )
+            .default_file_filter("Video files");
+
         Self {
             project: Project::default(),
             player: MpvPlayer::new(),
@@ -25,7 +36,7 @@ impl Default for DnClipApp {
             player_ready: false,
             export_status: String::new(),
             show_help: false,
-
+            file_dialog,
         }
     }
 }
@@ -148,6 +159,32 @@ impl DnClipApp {
 
 impl eframe::App for DnClipApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // ── File dialog ──
+        self.file_dialog.update(ctx);
+        if let Some(path) = self.file_dialog.take_picked() {
+            let path_str = path.to_string_lossy().to_string();
+            self.open_file(&path_str);
+        }
+
+        // ── Drag-and-drop ──
+        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        for file in dropped {
+            if let Some(path) = file.path {
+                let valid_extensions = ["mp4", "mov", "mkv", "avi", "webm",
+                                        "mts", "m2ts", "ts", "flv", "wmv"];
+                if let Some(ext) = path.extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.to_lowercase())
+                {
+                    if valid_extensions.contains(&ext.as_str()) {
+                        let path_str = path.to_string_lossy().to_string();
+                        self.open_file(&path_str);
+                        break;
+                    }
+                }
+            }
+        }
+
         // Poll mpv state
         if self.player_ready {
             match self.player.get_time_pos() {
@@ -172,8 +209,7 @@ impl eframe::App for DnClipApp {
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("📂 Open File").clicked() {
-                    // Native file dialog via rfd would be ideal, but for now
-                    // use a simple text input
+                    self.file_dialog.pick_file();
                 }
                 if ui.button("❓ Help").clicked() {
                     self.show_help = !self.show_help;
@@ -446,7 +482,7 @@ impl eframe::App for DnClipApp {
             for event in &i.events {
                 if let egui::Event::Key { key, pressed: true, modifiers, .. } = event {
                     if modifiers.ctrl && *key == egui::Key::O {
-                        // Would open file dialog
+                        self.file_dialog.pick_file();
                     } else if *key == egui::Key::H {
                         self.show_help = !self.show_help;
                     } else if *key == egui::Key::Space && self.player_ready {

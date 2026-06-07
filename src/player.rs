@@ -51,19 +51,19 @@ impl MpvPlayer {
 
         self.running.store(true, Ordering::SeqCst);
 
-        let child = Command::new("mpv")
+        let ipc_arg = format!("--input-ipc-server={}", self.socket_path);
+        let mut child = Command::new("mpv")
             .args([
                 "--no-terminal",
                 "--keep-open=yes",
                 "--osd-level=0",
                 "--osc=no",
-                "--input-ipc-server",
-                &self.socket_path,
+                &ipc_arg,
                 file_path,
             ])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::inherit())
             .spawn()
             .context("Failed to launch mpv. Is it installed?")?;
 
@@ -75,14 +75,21 @@ impl MpvPlayer {
             if std::path::Path::new(&self.socket_path).exists() {
                 break;
             }
+            if let Ok(Some(status)) = child.try_wait() {
+                self.running.store(false, Ordering::SeqCst);
+                anyhow::bail!(
+                    "mpv exited early (status: {}). Check terminal above for mpv errors.",
+                    status,
+                );
+            }
             std::thread::sleep(Duration::from_millis(100));
             retries -= 1;
         }
 
         if retries == 0 {
             self.running.store(false, Ordering::SeqCst);
-            let _ = child.wait_with_output();
-            anyhow::bail!("mpv failed to create IPC socket within timeout");
+            let _ = child.wait();
+            anyhow::bail!("mpv failed to create IPC socket within timeout.");
         }
 
         self.process = Some(child);
@@ -98,16 +105,16 @@ impl MpvPlayer {
 
         self.running.store(true, Ordering::SeqCst);
 
+        let ipc_arg = format!("--input-ipc-server={}", self.socket_path);
+        let wid_arg = format!("--wid={}", wid);
         let child = Command::new("mpv")
             .args([
                 "--no-terminal",
                 "--keep-open=yes",
                 "--osd-level=0",
                 "--osc=no",
-                "--input-ipc-server",
-                &self.socket_path,
-                "--wid",
-                &wid.to_string(),
+                &ipc_arg,
+                &wid_arg,
                 file_path,
             ])
             .stdin(Stdio::null())
