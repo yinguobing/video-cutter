@@ -93,3 +93,16 @@ impl Project {
         }
     }
 }
+
+/// A saved export segment with defined in/out points.
+#[derive(Debug, Clone)]
+pub struct Segment {
+    pub in_point: f64,
+    pub out_point: f64,
+}
+
+impl Segment {
+    pub fn duration(&self) -> f64 {
+        self.out_point - self.in_point
+    }
+}

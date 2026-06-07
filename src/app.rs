@@ -3,7 +3,7 @@ use egui_file_dialog::FileDialog;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use crate::embed::EmbeddedWindow;
 use crate::player::MpvPlayer;
-use crate::types::{DnxProfile, Project, VideoInfo};
+use crate::types::{DnxProfile, Project, Segment, VideoInfo};
 use crate::export::{ExportJob, default_output_path};
 
 /// Main application state.
@@ -21,6 +21,7 @@ pub struct DnClipApp {
     preview_rect: Option<egui::Rect>,
     embedded_initialized: bool,
     pending_open: Option<String>,
+    segments: Vec<Segment>,
 }
 
 impl Default for DnClipApp {
@@ -47,6 +48,7 @@ impl Default for DnClipApp {
             preview_rect: None,
             embedded_initialized: false,
             pending_open: None,
+            segments: Vec::new(),
         }
     }
 }
@@ -127,7 +129,7 @@ impl DnClipApp {
         self.export_status = format!("Loaded: {}", path);
     }
 
-    /// Execute export.
+    /// Execute export for all saved segments, or the current I/O pair.
     fn do_export(&mut self) {
         let source = match &self.project.source_path {
             Some(p) => p.to_string_lossy().to_string(),
@@ -137,52 +139,79 @@ impl DnClipApp {
             }
         };
 
-        let in_pt = self.project.in_point.unwrap_or(0.0);
-        let out_pt = self.project.out_point.unwrap_or(
-            self.project.video_info.as_ref().map(|i| i.duration).unwrap_or(0.0)
-        );
+        // Build export list: segments or current I/O
+        let exports: Vec<(f64, f64)> = if !self.segments.is_empty() {
+            self.segments.iter().map(|s| (s.in_point, s.out_point)).collect()
+        } else {
+            let in_pt = self.project.in_point.unwrap_or(0.0);
+            let out_pt = self.project.out_point.unwrap_or(
+                self.project.video_info.as_ref().map(|i| i.duration).unwrap_or(0.0)
+            );
+            if out_pt <= in_pt {
+                self.export_status = "Out point must be after in point".to_string();
+                return;
+            }
+            vec![(in_pt, out_pt)]
+        };
 
-        if out_pt <= in_pt {
-            self.export_status = "Out point must be after in point".to_string();
+        if exports.is_empty() {
+            self.export_status = "No segments to export".to_string();
             return;
         }
-
-        if out_pt - in_pt < 0.1 {
-            self.export_status = "Segment too short (min 0.1s)".to_string();
-            return;
-        }
-
-        // Determine output path
-        let out_path = self.project.export_params.output_path.clone()
-            .unwrap_or_else(|| {
-                let input = std::path::Path::new(&source);
-                std::path::PathBuf::from(default_output_path(input, &self.project.export_params.profile))
-            });
 
         let (width, height) = match &self.project.video_info {
             Some(info) => (info.width, info.height),
             None => (1920, 1080),
         };
 
-        let job = ExportJob {
-            input_path: source,
-            output_path: out_path.to_string_lossy().to_string(),
-            in_point: in_pt,
-            out_point: out_pt,
-            profile: self.project.export_params.profile,
-            width,
-            height,
-        };
+        let profile = self.project.export_params.profile;
 
-        self.export_status = "Exporting... (this may take a while)".to_string();
+        let mut errors = Vec::new();
+        for (idx, (in_pt, out_pt)) in exports.iter().enumerate() {
+            let dur = out_pt - in_pt;
+            if dur < 0.1 {
+                errors.push(format!("#{}: segment too short", idx + 1));
+                continue;
+            }
 
-        match job.run() {
-            Ok(()) => {
-                self.export_status = format!("✅ Exported: {}", out_path.display());
+            let input_path = std::path::Path::new(&source);
+            let out_path = if exports.len() > 1 {
+                let stem = input_path.file_stem()
+                    .map(|s| s.to_string_lossy())
+                    .unwrap_or(std::borrow::Cow::Borrowed("output"));
+                let profile_tag = profile.ffmpeg_profile().replace("dnxhr_", "");
+                format!("{}_{}_{:03}.mov", stem, profile_tag, idx + 1)
+            } else {
+                default_output_path(input_path, &profile)
+            };
+
+            self.export_status = format!("Exporting {} / {}...", idx + 1, exports.len());
+
+            let job = ExportJob {
+                input_path: source.clone(),
+                output_path: out_path.clone(),
+                in_point: *in_pt,
+                out_point: *out_pt,
+                profile,
+                width,
+                height,
+            };
+
+            match job.run() {
+                Ok(()) => {
+                    log::info!("Exported: {}", out_path);
+                }
+                Err(e) => {
+                    errors.push(format!("#{}: {}", idx + 1, e));
+                }
             }
-            Err(e) => {
-                self.export_status = format!("❌ Export failed: {}", e);
-            }
+        }
+
+        if errors.is_empty() {
+            self.segments.clear();
+            self.export_status = format!("✅ Exported {} segment(s)", exports.len());
+        } else {
+            self.export_status = format!("❌ {} error(s): {}", errors.len(), errors.join("; "));
         }
     }
 }
@@ -296,13 +325,106 @@ impl eframe::App for DnClipApp {
                 });
         }
 
+        // ── Right sidebar ──
+        egui::SidePanel::right("sidebar")
+            .min_width(220.0)
+            .resizable(true)
+            .show(ctx, |ui| {
+                ui.heading("📋 Segments");
+                ui.add_space(4.0);
+
+                // Segment list
+                let mut remove_idx: Option<usize> = None;
+                egui::ScrollArea::vertical()
+                    .max_height(ui.available_height() - 120.0)
+                    .show(ui, |ui| {
+                        if self.segments.is_empty() {
+                            ui.label("No segments saved.");
+                            ui.label("Set I/O points and click");
+                            ui.label("\"➕ Capture I/O\" below.");
+                        } else {
+                            for (i, seg) in self.segments.iter().enumerate() {
+                                ui.horizontal(|ui| {
+                                    ui.label(format!("#{}", i + 1));
+                                    ui.label(format!(
+                                        "{} → {}",
+                                        DnClipApp::format_time(seg.in_point),
+                                        DnClipApp::format_time(seg.out_point),
+                                    ));
+                                    ui.label(format!("({:.1}s)", seg.duration()));
+                                    if ui.button("✕").clicked() {
+                                        remove_idx = Some(i);
+                                    }
+                                });
+                            }
+                        }
+                    });
+                if let Some(i) = remove_idx {
+                    self.segments.remove(i);
+                }
+
+                ui.add_space(4.0);
+
+                // Capture current I/O
+                let have_io = self.project.in_point.is_some() && self.project.out_point.is_some();
+                if ui.add_enabled(
+                    have_io,
+                    egui::Button::new("➕ Capture I/O"),
+                ).clicked() {
+                    let seg = Segment {
+                        in_point: self.project.in_point.unwrap(),
+                        out_point: self.project.out_point.unwrap(),
+                    };
+                    self.segments.push(seg);
+                    self.project.in_point = None;
+                    self.project.out_point = None;
+                }
+
+                ui.separator();
+
+                // Profile selector
+                ui.horizontal(|ui| {
+                    ui.label("Profile:");
+                    let current = &mut self.project.export_params.profile;
+                    egui::ComboBox::from_id_salt("profile_selector")
+                        .selected_text(current.label())
+                        .show_ui(ui, |ui| {
+                            let profiles = [
+                                DnxProfile::DnxHR_LB,
+                                DnxProfile::DnxHR_SQ,
+                                DnxProfile::DnxHR_HQ,
+                                DnxProfile::DnxHR_HQX,
+                            ];
+                            for p in profiles {
+                                ui.selectable_value(current, p, p.label());
+                            }
+                        });
+                });
+
+                ui.add_space(4.0);
+
+                // Export button
+                let can_export = have_io || !self.segments.is_empty();
+                if ui.add_enabled(
+                    can_export,
+                    egui::Button::new("💾 Export"),
+                ).clicked() {
+                    self.do_export();
+                }
+
+                if !self.export_status.is_empty() {
+                    ui.add_space(4.0);
+                    ui.label(&self.export_status);
+                }
+            });
+
         // ── Main content ──
         egui::CentralPanel::default().show(ctx, |ui| {
             // Video preview area
             egui::Frame::dark_canvas(ui.style()).show(ui, |ui| {
                 let avail = ui.available_size();
                 // 16:9 ratio, capped to leave room for controls below
-                let preview_h = (avail.x * 0.5625).min(avail.y * 0.55);
+                let preview_h = (avail.x * 0.5625).min(avail.y * 0.70);
                 let preview_size = egui::vec2(avail.x, preview_h);
                 let (rect, _) = ui.allocate_exact_size(preview_size, egui::Sense::hover());
 
@@ -326,7 +448,7 @@ impl eframe::App for DnClipApp {
                         egui::Color32::WHITE,
                     );
 
-                    // Show IN/OUT markers at top
+                    // Show IN/OUT markers
                     let total_dur = self.project.video_info.as_ref()
                         .map(|i| i.duration).unwrap_or(1.0);
                     if total_dur > 0.0 {
@@ -365,20 +487,6 @@ impl eframe::App for DnClipApp {
                             );
                         }
                     }
-
-                    // Center text
-                    let status_text = if self.embedded.is_active() {
-                        "🎬 Playing (embedded)"
-                    } else {
-                        "🎬 mpv playback window (separate)"
-                    };
-                    ui.painter().text(
-                        rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        status_text,
-                        egui::FontId::proportional(16.0),
-                        egui::Color32::GRAY,
-                    );
                 } else {
                     // Drag-and-drop hint
                     ui.painter().text(
@@ -391,13 +499,12 @@ impl eframe::App for DnClipApp {
                 }
             });
 
-            ui.add_space(8.0);
+            ui.add_space(6.0);
 
-            // ── Timeline ──
+            // ── Timeline + I/O display ──
             if let Some(info) = &self.project.video_info {
                 let total_dur = info.duration;
                 if total_dur > 0.0 {
-                    // Compact time display
                     ui.horizontal(|ui| {
                         ui.label(Self::format_time(self.current_time));
                         ui.label(format!(" / {}", Self::format_time(total_dur)));
@@ -434,34 +541,33 @@ impl eframe::App for DnClipApp {
                         );
                     }
 
+                    // ── I/O controls (inline below timeline) ──
+                    ui.horizontal(|ui| {
+                        if ui.button("I").clicked() {
+                            self.project.in_point = Some(self.current_time);
+                        }
+                        ui.label(format!("IN: {}", Self::format_time(self.project.in_point.unwrap_or(0.0))));
+
+                        if ui.button("O").clicked() {
+                            self.project.out_point = Some(self.current_time);
+                        }
+                        ui.label(format!("OUT: {}", Self::format_time(self.project.out_point.unwrap_or(0.0))));
+
+                        if let Some(dur) = self.project.segment_duration() {
+                            ui.label(format!("| Dur: {}", Self::format_time(dur)));
+                        }
+
+                        if self.project.in_point.is_some() || self.project.out_point.is_some() {
+                            if ui.button("Clear").clicked() {
+                                self.project.in_point = None;
+                                self.project.out_point = None;
+                            }
+                        }
+                    });
+
                     ui.add_space(4.0);
                 }
             }
-
-            ui.separator();
-
-            // ── I/O Point Display ──
-            ui.horizontal(|ui| {
-                ui.label(format!("IN:  {}", Self::format_time(self.project.in_point.unwrap_or(0.0))));
-                if ui.button("I").clicked() {
-                    self.project.in_point = Some(self.current_time);
-                }
-                ui.separator();
-                ui.label(format!("OUT: {}", Self::format_time(self.project.out_point.unwrap_or(0.0))));
-                if ui.button("O").clicked() {
-                    self.project.out_point = Some(self.current_time);
-                }
-                ui.separator();
-                if let Some(dur) = self.project.segment_duration() {
-                    ui.label(format!("Duration: {}", Self::format_time(dur)));
-                }
-                if ui.button("Clear I/O").clicked() {
-                    self.project.in_point = None;
-                    self.project.out_point = None;
-                }
-            });
-
-            ui.add_space(4.0);
 
             // ── Playback Controls ──
             ui.horizontal(|ui| {
@@ -491,7 +597,6 @@ impl eframe::App for DnClipApp {
 
                 if ui.button("◀ Frame").clicked() {
                     let _ = self.player.frame_step(false);
-                    // Update current time after frame step
                     if let Ok(t) = self.player.get_time_pos() {
                         self.current_time = t;
                     }
@@ -503,40 +608,6 @@ impl eframe::App for DnClipApp {
                     }
                 }
             });
-
-            ui.add_space(8.0);
-
-            // ── Export Panel ──
-            egui::CollapsingHeader::new("⚙ Export Settings")
-                .default_open(true)
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Profile:");
-                        let current = &mut self.project.export_params.profile;
-                        egui::ComboBox::from_id_salt("profile_selector")
-                            .selected_text(current.label())
-                            .show_ui(ui, |ui| {
-                                let profiles = [
-                                    DnxProfile::DnxHR_LB,
-                                    DnxProfile::DnxHR_SQ,
-                                    DnxProfile::DnxHR_HQ,
-                                    DnxProfile::DnxHR_HQX,
-                                ];
-                                for p in profiles {
-                                    ui.selectable_value(current, p, p.label());
-                                }
-                            });
-                    });
-
-                    ui.horizontal(|ui| {
-                        if ui.button("💾 Export Segment").clicked() {
-                            self.do_export();
-                        }
-                        if !self.export_status.is_empty() {
-                            ui.label(&self.export_status);
-                        }
-                    });
-                });
         });
 
         // ── Process deferred file open (after preview_rect is known) ──
