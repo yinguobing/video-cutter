@@ -298,13 +298,13 @@ impl eframe::App for DnClipApp {
 
         // ── Main content ──
         egui::CentralPanel::default().show(ctx, |ui| {
-            // Video preview area (placeholder for now)
+            // Video preview area
             egui::Frame::dark_canvas(ui.style()).show(ui, |ui| {
                 let avail = ui.available_size();
-                let (rect, _) = ui.allocate_exact_size(
-                    egui::vec2(avail.x, avail.x * 0.5625), // 16:9
-                    egui::Sense::hover(),
-                );
+                // 16:9 ratio, capped to leave room for controls below
+                let preview_h = (avail.x * 0.5625).min(avail.y * 0.55);
+                let preview_size = egui::vec2(avail.x, preview_h);
+                let (rect, _) = ui.allocate_exact_size(preview_size, egui::Sense::hover());
 
                 // Store for embedded window positioning
                 self.preview_rect = Some(rect);
