@@ -470,8 +470,7 @@ impl eframe::App for DnClipApp {
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
                 // Controls at the bottom
                 if has_video && total_dur > 0.0 {
-                    ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                        ui.horizontal(|ui| {
+                    ui.horizontal_centered(|ui| {
                             ui.spacing_mut().item_spacing.x = 4.0;
                             if ui.button("⏮").clicked() { let _ = self.player.seek_relative(-30.0); }
                             if ui.button("◀◀").clicked() { let _ = self.player.seek_relative(-5.0); }
@@ -493,7 +492,6 @@ impl eframe::App for DnClipApp {
                                 if ui.button("✕").clicked() { self.project.in_point = None; self.project.out_point = None; }
                             }
                         });
-                    });
 
                     let slider = egui::Slider::new(&mut self.current_time, 0.0..=total_dur as f64)
                         .clamping(egui::SliderClamping::Always)
