@@ -470,27 +470,29 @@ impl eframe::App for DnClipApp {
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
                 // Controls at the bottom
                 if has_video && total_dur > 0.0 {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 4.0;
-                        if ui.button("⏮").clicked() { let _ = self.player.seek_relative(-30.0); }
-                        if ui.button("◀◀").clicked() { let _ = self.player.seek_relative(-5.0); }
-                        let play_label = if self.paused { "▶" } else { "⏸" };
-                        if ui.button(play_label).clicked() { let _ = self.player.toggle_pause(); self.paused = !self.paused; }
-                        if ui.button("▶▶").clicked() { let _ = self.player.seek_relative(5.0); }
-                        if ui.button("⏭").clicked() { let _ = self.player.seek_relative(30.0); }
-                        if ui.button("◀F").clicked() { let _ = self.player.frame_step(false); if let Ok(t) = self.player.get_time_pos() { self.current_time = t; } }
-                        if ui.button("F▶").clicked() { let _ = self.player.frame_step(true); if let Ok(t) = self.player.get_time_pos() { self.current_time = t; } }
-                        ui.separator();
-                        if ui.button("I").clicked() { self.project.in_point = Some(self.current_time); }
-                        ui.label(format!("IN:{}", Self::format_time(self.project.in_point.unwrap_or(0.0))));
-                        if ui.button("O").clicked() { self.project.out_point = Some(self.current_time); }
-                        ui.label(format!("OUT:{}", Self::format_time(self.project.out_point.unwrap_or(0.0))));
-                        if let Some(dur) = self.project.segment_duration() {
-                            ui.label(format!("Dur:{}", Self::format_time(dur)));
-                        }
-                        if self.project.in_point.is_some() || self.project.out_point.is_some() {
-                            if ui.button("✕").clicked() { self.project.in_point = None; self.project.out_point = None; }
-                        }
+                    ui.centered_and_justified(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            if ui.button("⏮").clicked() { let _ = self.player.seek_relative(-30.0); }
+                            if ui.button("◀◀").clicked() { let _ = self.player.seek_relative(-5.0); }
+                            let play_label = if self.paused { "▶" } else { "⏸" };
+                            if ui.button(play_label).clicked() { let _ = self.player.toggle_pause(); self.paused = !self.paused; }
+                            if ui.button("▶▶").clicked() { let _ = self.player.seek_relative(5.0); }
+                            if ui.button("⏭").clicked() { let _ = self.player.seek_relative(30.0); }
+                            if ui.button("◀F").clicked() { let _ = self.player.frame_step(false); if let Ok(t) = self.player.get_time_pos() { self.current_time = t; } }
+                            if ui.button("F▶").clicked() { let _ = self.player.frame_step(true); if let Ok(t) = self.player.get_time_pos() { self.current_time = t; } }
+                            ui.separator();
+                            if ui.button("I").clicked() { self.project.in_point = Some(self.current_time); }
+                            ui.label(format!("IN:{}", Self::format_time(self.project.in_point.unwrap_or(0.0))));
+                            if ui.button("O").clicked() { self.project.out_point = Some(self.current_time); }
+                            ui.label(format!("OUT:{}", Self::format_time(self.project.out_point.unwrap_or(0.0))));
+                            if let Some(dur) = self.project.segment_duration() {
+                                ui.label(format!("Dur:{}", Self::format_time(dur)));
+                            }
+                            if self.project.in_point.is_some() || self.project.out_point.is_some() {
+                                if ui.button("✕").clicked() { self.project.in_point = None; self.project.out_point = None; }
+                            }
+                        });
                     });
 
                     let slider = egui::Slider::new(&mut self.current_time, 0.0..=total_dur as f64)
