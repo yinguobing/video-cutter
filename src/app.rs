@@ -432,12 +432,12 @@ impl eframe::App for DnClipApp {
                         });
                     });
 
-                    // Timeline slider
+                    // Timeline slider — full width
                     let slider = egui::Slider::new(&mut self.current_time, 0.0..=total_dur as f64)
                         .clamping(egui::SliderClamping::Always)
                         .show_value(false)
                         .trailing_fill(true);
-                    let resp = ui.add(slider);
+                    let resp = ui.add_sized([ui.available_width(), 0.0], slider);
 
                     if resp.changed() {
                         let _ = self.player.seek(self.current_time);
