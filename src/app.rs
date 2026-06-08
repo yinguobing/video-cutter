@@ -187,7 +187,37 @@ impl DnClipApp {
             let out_path = if let Some(dir) = &self.project.export_params.output_path {
                 dir.join(&out_filename).to_string_lossy().to_string()
             } else {
-                out_filename
+                out_filename.clone()
+            };
+
+            // Warn if output file already exists
+            let existing = std::path::Path::new(&out_path).exists();
+            let out_path = if existing {
+                let confirmed = rfd::MessageDialog::new()
+                    .set_title("File exists")
+                    .set_description(&format!(
+                        "{} already exists.\nOverwrite?",
+                        out_path
+                    ))
+                    .set_buttons(rfd::MessageButtons::YesNo)
+                    .show();
+                if confirmed == rfd::MessageDialogResult::Yes {
+                    out_path
+                } else {
+                    let stem = out_filename.trim_end_matches(".mov");
+                    if let Some(new_path) = rfd::FileDialog::new()
+                        .set_file_name(stem)
+                        .add_filter("MOV", &["mov"])
+                        .save_file()
+                    {
+                        new_path.to_string_lossy().to_string()
+                    } else {
+                        self.export_status = format!("Skipped: {}", out_path);
+                        continue;
+                    }
+                }
+            } else {
+                out_path
             };
 
             self.export_status = format!("Exporting {} / {}...", idx + 1, exports.len());
