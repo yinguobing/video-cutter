@@ -360,9 +360,10 @@ impl eframe::App for DnClipApp {
 
         // ── Right sidebar ──
         egui::Panel::right("sidebar")
-            .min_size(220.0)
+            .min_size(300.0)
             .resizable(true)
             .show_inside(ui, |ui| {
+                ui.heading("File");
                 if ui.button("📂 Open File").clicked() {
                     self.file_dialog.pick_file();
                 }
@@ -377,9 +378,7 @@ impl eframe::App for DnClipApp {
                     .max_height(ui.available_height() - 120.0)
                     .show(ui, |ui| {
                         if self.segments.is_empty() {
-                            ui.label("No segments saved.");
-                            ui.label("Set I/O points and click");
-                            ui.label("\"➕ Capture I/O\" below.");
+                            ui.label("No segments staged.");
                         } else {
                             for (i, seg) in self.segments.iter().enumerate() {
                                 ui.horizontal(|ui| {
@@ -401,26 +400,10 @@ impl eframe::App for DnClipApp {
                     self.segments.remove(i);
                 }
 
-                ui.add_space(4.0);
-
-                // Capture current I/O
-                let have_io = self.project.in_point.is_some() && self.project.out_point.is_some();
-                if ui
-                    .add_enabled(have_io, egui::Button::new("➕ Capture I/O"))
-                    .clicked()
-                {
-                    let seg = Segment {
-                        in_point: self.project.in_point.unwrap(),
-                        out_point: self.project.out_point.unwrap(),
-                    };
-                    self.segments.push(seg);
-                    self.project.in_point = None;
-                    self.project.out_point = None;
-                }
-
                 ui.separator();
 
                 // Profile selector
+                ui.heading("Export");
                 ui.horizontal(|ui| {
                     ui.label("Profile:");
                     let current = &mut self.project.export_params.profile;
@@ -442,6 +425,7 @@ impl eframe::App for DnClipApp {
                 ui.add_space(4.0);
 
                 // Export button
+                let have_io = self.project.in_point.is_some() && self.project.out_point.is_some();
                 let can_export = have_io || !self.segments.is_empty();
                 if ui
                     .add_enabled(can_export, egui::Button::new("💾 Export"))
@@ -558,17 +542,6 @@ impl eframe::App for DnClipApp {
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
-                                        if self.project.in_point.is_some()
-                                            || self.project.out_point.is_some()
-                                        {
-                                            if ui.button("✕").clicked() {
-                                                self.project.in_point = None;
-                                                self.project.out_point = None;
-                                            }
-                                        }
-                                        if let Some(dur) = self.project.segment_duration() {
-                                            ui.label(format!("Dur:{}", Self::format_time(dur)));
-                                        }
                                         ui.label(format!(
                                             "OUT:{}",
                                             Self::format_time(
@@ -577,6 +550,19 @@ impl eframe::App for DnClipApp {
                                         ));
                                         if ui.button("O").clicked() {
                                             self.project.out_point = Some(self.current_time);
+                                            // Auto-capture when both I and O are set
+                                            if let (Some(in_pt), Some(out_pt)) =
+                                                (self.project.in_point, self.project.out_point)
+                                            {
+                                                if out_pt > in_pt {
+                                                    self.segments.push(Segment {
+                                                        in_point: in_pt,
+                                                        out_point: out_pt,
+                                                    });
+                                                }
+                                                self.project.in_point = None;
+                                                self.project.out_point = None;
+                                            }
                                         }
                                         ui.label(format!(
                                             "IN:{}",
@@ -594,34 +580,31 @@ impl eframe::App for DnClipApp {
 
             // Preview fills remaining space
             egui::CentralPanel::default().show_inside(ui, |ui| {
-                egui::Frame::dark_canvas(ui.style()).show(ui, |ui| {
-                    let avail = ui.available_size();
-                    let (pw, ph) = if avail.y > avail.x * 0.5625 {
-                        (avail.x, avail.x * 0.5625)
-                    } else {
-                        (avail.y / 0.5625, avail.y)
-                    };
-                    ui.centered_and_justified(|ui| {
-                        let (rect, _) =
-                            ui.allocate_exact_size(egui::vec2(pw, ph), egui::Sense::hover());
-                        self.preview_rect = Some(rect);
-                        ui.painter().rect_filled(
-                            rect,
-                            egui::CornerRadius::same(4),
-                            egui::Color32::from_rgb(20, 20, 30),
-                        );
-
-                        if !self.player_ready {
-                            ui.painter().text(
-                                rect.center(),
-                                egui::Align2::CENTER_CENTER,
-                                "Drop a video file or use Ctrl+O to open",
-                                egui::FontId::proportional(18.0),
-                                egui::Color32::GRAY,
-                            );
-                        }
-                    });
-                });
+                let avail = ui.available_size();
+                // Keep 16:9 but maximize within available space
+                let (pw, ph) = if avail.y > avail.x * 0.5625 {
+                    (avail.x, avail.x * 0.5625)
+                } else {
+                    (avail.y / 0.5625, avail.y)
+                };
+                ui.centered_and_justified(|ui| {
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(pw, ph), egui::Sense::hover());
+                self.preview_rect = Some(rect);
+                ui.painter().rect_filled(
+                    rect,
+                    egui::CornerRadius::same(4),
+                    egui::Color32::from_rgb(20, 20, 30),
+                );
+                if !self.player_ready {
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "Drop a video file or use Ctrl+O to open",
+                        egui::FontId::proportional(18.0),
+                        egui::Color32::GRAY,
+                    );
+                }
+            });
             });
         });
 
