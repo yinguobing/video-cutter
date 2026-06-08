@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=DnClip
+Comment=Video trimmer with mpv preview and DNxHD export
+Exec=/usr/bin/dnclip
+Icon=dnclip
+Terminal=false
+Categories=AudioVideo;Video;

@@ -231,6 +231,7 @@ impl eframe::App for DnClipApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         // Debug mode: show widget rects + names on hover
         if self.debug_hover {
+            #[cfg(debug_assertions)]
             ctx.style_mut(|s| s.debug.debug_on_hover = true);
             // Also show an overlay panel with widget tree info
             egui::Window::new("🔍 UI Debug")
@@ -521,8 +522,6 @@ impl eframe::App for DnClipApp {
                         });
                     });
                 }
-
-                ui.separator();
 
                 // Preview fills remaining space above controls
                 egui::Frame::dark_canvas(ui.style()).show(ui, |ui| {
