@@ -4,7 +4,6 @@ use crate::player::MpvPlayer;
 use crate::types::{DnxProfile, Project, Segment, VideoInfo};
 use eframe::egui;
 use egui_alignments::center_horizontal;
-use egui_file_dialog::FileDialog;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 /// Main application state.
@@ -18,7 +17,6 @@ pub struct DnClipApp {
     player_ready: bool,
     export_status: String,
     show_help: bool,
-    file_dialog: FileDialog,
     preview_rect: Option<egui::Rect>,
     embedded_initialized: bool,
     pending_open: Option<String>,
@@ -28,16 +26,6 @@ pub struct DnClipApp {
 
 impl Default for DnClipApp {
     fn default() -> Self {
-        let file_dialog = FileDialog::default()
-            .initial_directory(std::env::current_dir().unwrap_or_default())
-            .add_file_filter_extensions(
-                "Video files",
-                vec![
-                    "mp4", "mov", "mkv", "avi", "webm", "mts", "m2ts", "ts", "flv", "wmv",
-                ],
-            )
-            .default_file_filter("Video files");
-
         Self {
             project: Project::default(),
             player: MpvPlayer::new(),
@@ -47,7 +35,6 @@ impl Default for DnClipApp {
             player_ready: false,
             export_status: String::new(),
             show_help: false,
-            file_dialog,
             preview_rect: None,
             embedded_initialized: false,
             pending_open: None,
@@ -186,7 +173,7 @@ impl DnClipApp {
             }
 
             let input_path = std::path::Path::new(&source);
-            let out_path = if exports.len() > 1 {
+            let out_filename = if exports.len() > 1 {
                 let stem = input_path
                     .file_stem()
                     .map(|s| s.to_string_lossy())
@@ -195,6 +182,12 @@ impl DnClipApp {
                 format!("{}_{}_{:03}.mov", stem, profile_tag, idx + 1)
             } else {
                 default_output_path(input_path, &profile)
+            };
+
+            let out_path = if let Some(dir) = &self.project.export_params.output_path {
+                dir.join(&out_filename).to_string_lossy().to_string()
+            } else {
+                out_filename
             };
 
             self.export_status = format!("Exporting {} / {}...", idx + 1, exports.len());
@@ -290,12 +283,6 @@ impl eframe::App for DnClipApp {
             }
         }
 
-        // ── File dialog ──
-        self.file_dialog.update(&ctx);
-        if let Some(path) = self.file_dialog.take_picked() {
-            self.pending_open = Some(path.to_string_lossy().to_string());
-        }
-
         // ── Drag-and-drop ──
         if self.pending_open.is_none() {
             let dropped = ctx.input(|i| i.raw.dropped_files.clone());
@@ -365,7 +352,12 @@ impl eframe::App for DnClipApp {
             .show_inside(ui, |ui| {
                 ui.heading("File");
                 if ui.button("📂 Open File").clicked() {
-                    self.file_dialog.pick_file();
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Video files", &["mp4", "mov", "mkv", "avi", "webm", "mts", "m2ts", "ts", "flv", "wmv"])
+                        .pick_file()
+                    {
+                        self.pending_open = Some(path.to_string_lossy().to_string());
+                    }
                 }
 
                 ui.separator();
@@ -420,6 +412,25 @@ impl eframe::App for DnClipApp {
                                 ui.selectable_value(current, p, p.label());
                             }
                         });
+                });
+
+                ui.add_space(4.0);
+
+                // Output directory
+                ui.horizontal(|ui| {
+                    if ui.button("📁 Output Dir").clicked() {
+                        if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                            self.project.export_params.output_path = Some(dir);
+                        }
+                    }
+                    if let Some(dir) = &self.project.export_params.output_path {
+                        ui.label(dir.to_string_lossy().to_string());
+                        if ui.button("✕").clicked() {
+                            self.project.export_params.output_path = None;
+                        }
+                    } else {
+                        ui.label("(same as source)");
+                    }
                 });
 
                 ui.add_space(4.0);
@@ -626,7 +637,12 @@ impl eframe::App for DnClipApp {
                     if modifiers.ctrl && *key == egui::Key::D {
                         self.debug_hover = !self.debug_hover;
                     } else if modifiers.ctrl && *key == egui::Key::O {
-                        self.file_dialog.pick_file();
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("Video files", &["mp4", "mov", "mkv", "avi", "webm", "mts", "m2ts", "ts", "flv", "wmv"])
+                            .pick_file()
+                        {
+                            self.pending_open = Some(path.to_string_lossy().to_string());
+                        }
                     } else if *key == egui::Key::H {
                         self.show_help = !self.show_help;
                     } else if *key == egui::Key::Space && self.player_ready {
