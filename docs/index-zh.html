@@ -1,0 +1,1043 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>dnclip — Linux 平台的 DaVinci Resolve 视频剪辑工具</title>
+<meta name="description" content="dnclip 是一款 Linux 桌面视频剪辑工具。使用 mpv 预览画面，标记入点/出点，导出 DNxHD/DNxHR .mov 文件，直接导入 DaVinci Resolve。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=ZCOOL+QingKe+HuangYou&family=Noto+Serif+SC:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-deep: #07070e;
+    --bg-surface: #0e0e1a;
+    --bg-elevated: #151528;
+    --bg-card: #181830;
+    --border: #252540;
+    --border-bright: #3a3a58;
+    --text-primary: #e8e8f2;
+    --text-secondary: #9898b4;
+    --text-muted: #606078;
+    --amber: #e8a420;
+    --amber-dim: #8a6010;
+    --cyan: #00c0c0;
+    --cyan-dim: #005858;
+    --red: #d83838;
+    --green: #38a058;
+    --green-dim: #1a4a28;
+    --font-display: 'ZCOOL QingKe HuangYou', 'Noto Serif SC', serif;
+    --font-mono: 'JetBrains Mono', 'Cascadia Code', monospace;
+    --font-body: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'SimSun', serif;
+    --grain-opacity: 0.04;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html {
+    scroll-behavior: smooth;
+    font-size: 16px;
+    background: var(--bg-deep);
+    color: var(--text-primary);
+  }
+
+  body {
+    font-family: var(--font-body);
+    line-height: 1.8;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow-x: hidden;
+  }
+
+  /* ── Grain overlay ─────────────────────────── */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    pointer-events: none;
+    opacity: var(--grain-opacity);
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+    background-size: 256px 256px;
+  }
+
+  /* ── Film perforations ────────────────────── */
+  .film-perf {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 8px;
+    z-index: 10000;
+    background: var(--bg-deep);
+  }
+  .film-perf::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: repeating-linear-gradient(
+      90deg,
+      transparent 0px,
+      transparent 14px,
+      var(--bg-deep) 14px,
+      var(--bg-deep) 18px
+    );
+    -webkit-mask-image: repeating-radial-gradient(
+      circle at 50% 50%,
+      black 0,
+      black 1.5px,
+      transparent 1.5px,
+      transparent 8px
+    );
+    mask-image: repeating-radial-gradient(
+      circle at 50% 50%,
+      black 0,
+      black 1.5px,
+      transparent 1.5px,
+      transparent 8px
+    );
+    -webkit-mask-size: 32px 8px;
+    mask-size: 32px 8px;
+  }
+
+  /* ── Navigation ───────────────────────────── */
+  nav {
+    position: fixed;
+    top: 12px;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    padding: 0 2rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    mix-blend-mode: difference;
+  }
+  .nav-brand {
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    color: var(--text-primary);
+    text-decoration: none;
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .rec-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--red);
+    box-shadow: 0 0 6px var(--red), 0 0 12px rgba(216, 56, 56, 0.4);
+    animation: rec-blink 2s ease-in-out infinite;
+  }
+  @keyframes rec-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+  .nav-links {
+    display: flex;
+    gap: 2rem;
+    list-style: none;
+  }
+  .nav-links a {
+    font-family: var(--font-body);
+    font-size: 0.8rem;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    color: var(--text-secondary);
+    text-decoration: none;
+    transition: color 0.2s;
+    position: relative;
+  }
+  .nav-links a::after {
+    content: '';
+    position: absolute;
+    bottom: -3px;
+    left: 0;
+    width: 0;
+    height: 1px;
+    background: var(--amber);
+    transition: width 0.3s cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
+  .nav-links a:hover { color: var(--text-primary); }
+  .nav-links a:hover::after { width: 100%; }
+
+  /* ── Hero ──────────────────────────────────── */
+  .hero {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    position: relative;
+    padding: 6rem 2rem 4rem;
+    text-align: center;
+  }
+  /* Viewfinder framelines */
+  .hero::before {
+    content: '';
+    position: absolute;
+    inset: 2rem;
+    border: 1px solid var(--border);
+    pointer-events: none;
+  }
+  .hero-frameline {
+    position: absolute;
+    width: 32px;
+    height: 32px;
+    pointer-events: none;
+    z-index: 2;
+  }
+  .hero-frameline::before,
+  .hero-frameline::after {
+    content: '';
+    position: absolute;
+    background: var(--amber);
+    opacity: 0.5;
+  }
+  .hero-frameline.tl { top: 2rem; left: 2rem; }
+  .hero-frameline.tr { top: 2rem; right: 2rem; }
+  .hero-frameline.bl { bottom: 2rem; left: 2rem; }
+  .hero-frameline.br { bottom: 2rem; right: 2rem; }
+  .hero-frameline.tl::before,
+  .hero-frameline.br::before { width: 100%; height: 1px; top: 0; left: 0; }
+  .hero-frameline.tl::after,
+  .hero-frameline.br::after { width: 1px; height: 100%; top: 0; left: 0; }
+  .hero-frameline.tr::before,
+  .hero-frameline.bl::before { width: 100%; height: 1px; top: 0; right: 0; }
+  .hero-frameline.tr::after,
+  .hero-frameline.bl::after { width: 1px; height: 100%; top: 0; right: 0; }
+
+  .hero-badge {
+    font-family: var(--font-body);
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    color: var(--amber);
+    padding: 0.4em 1.2em;
+    border: 1px solid var(--amber-dim);
+    border-radius: 2px;
+    margin-bottom: 2.5rem;
+  }
+  .hero-title {
+    font-family: var(--font-display);
+    font-size: clamp(4rem, 12vw, 9rem);
+    font-weight: 400;
+    line-height: 0.9;
+    letter-spacing: 0.04em;
+    color: var(--text-primary);
+  }
+  .hero-tagline {
+    font-family: var(--font-display);
+    font-size: clamp(1.4rem, 3.5vw, 2rem);
+    font-weight: 400;
+    letter-spacing: 0.08em;
+    color: var(--text-secondary);
+    margin-top: 1.5rem;
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .hero-tagline span {
+    position: relative;
+  }
+  .hero-tagline span:not(:last-child)::after {
+    content: '·';
+    color: var(--amber);
+    margin-left: 0.5rem;
+    font-weight: 700;
+  }
+  .hero-subtitle {
+    font-family: var(--font-body);
+    font-size: 1.1rem;
+    color: var(--text-muted);
+    margin-top: 2rem;
+    max-width: 520px;
+    line-height: 1.9;
+  }
+  /* Timecode display */
+  .timecode {
+    font-family: var(--font-mono);
+    font-size: clamp(1.5rem, 4vw, 2.5rem);
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    color: var(--amber);
+    margin-top: 3rem;
+    padding: 0.5rem 1.5rem;
+    border: 1px solid var(--amber-dim);
+    border-radius: 3px;
+    background: rgba(232, 164, 32, 0.04);
+  }
+  .timecode .frames {
+    font-size: 0.7em;
+    color: var(--amber-dim);
+  }
+  .hero-cta {
+    display: flex;
+    gap: 1rem;
+    margin-top: 3rem;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .btn {
+    font-family: var(--font-body);
+    font-size: 0.9rem;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-decoration: none;
+    padding: 0.9rem 2rem;
+    border-radius: 2px;
+    transition: all 0.25s cubic-bezier(0.22, 0.61, 0.36, 1);
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+  }
+  .btn-primary {
+    background: var(--amber);
+    color: var(--bg-deep);
+    border: 1px solid var(--amber);
+  }
+  .btn-primary:hover {
+    background: transparent;
+    color: var(--amber);
+    box-shadow: 0 0 24px rgba(232, 164, 32, 0.2);
+  }
+  .btn-secondary {
+    background: transparent;
+    color: var(--text-primary);
+    border: 1px solid var(--border-bright);
+  }
+  .btn-secondary:hover {
+    border-color: var(--text-secondary);
+    background: rgba(255,255,255,0.03);
+  }
+
+  /* ── Section shared styles ────────────────── */
+  section {
+    padding: 8rem 2rem;
+    position: relative;
+  }
+  .section-label {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.15em;
+    color: var(--cyan);
+    text-transform: uppercase;
+    margin-bottom: 1rem;
+  }
+  .section-title {
+    font-family: var(--font-display);
+    font-size: clamp(2rem, 5vw, 3.5rem);
+    font-weight: 400;
+    letter-spacing: 0.04em;
+    line-height: 1.3;
+    margin-bottom: 3rem;
+  }
+  .section-desc {
+    font-family: var(--font-body);
+    font-size: 1.1rem;
+    color: var(--text-secondary);
+    max-width: 640px;
+    margin-bottom: 4rem;
+    line-height: 1.9;
+  }
+
+  /* ── Features grid ────────────────────────── */
+  .features-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.5rem;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+  .feature-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 2.5rem 2rem;
+    position: relative;
+    transition: border-color 0.3s, transform 0.3s cubic-bezier(0.22, 0.61, 0.36, 1);
+    overflow: hidden;
+  }
+  .feature-card:hover {
+    border-color: var(--border-bright);
+    transform: translateY(-4px);
+  }
+  .feature-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--cyan), var(--amber));
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  .feature-card:hover::before { opacity: 1; }
+  .feature-number {
+    font-family: var(--font-display);
+    font-size: 3rem;
+    font-weight: 400;
+    color: var(--border-bright);
+    line-height: 1;
+    margin-bottom: 1rem;
+    transition: color 0.3s;
+  }
+  .feature-card:hover .feature-number { color: var(--cyan); }
+  .feature-card h3 {
+    font-family: var(--font-display);
+    font-size: 1.3rem;
+    font-weight: 400;
+    margin-bottom: 0.75rem;
+    letter-spacing: 0.02em;
+  }
+  .feature-card p {
+    font-family: var(--font-body);
+    font-size: 0.95rem;
+    color: var(--text-secondary);
+    line-height: 1.9;
+  }
+
+  /* ── Architecture (How It Works) ──────────── */
+  .arch-section {
+    max-width: 1000px;
+    margin: 0 auto;
+  }
+  .arch-diagram {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    padding: 3rem 0;
+  }
+  .arch-node {
+    font-family: var(--font-body);
+    font-size: 0.9rem;
+    font-weight: 500;
+    letter-spacing: 0.03em;
+    padding: 1.2rem 1.8rem;
+    border: 1px solid var(--border-bright);
+    border-radius: 3px;
+    background: var(--bg-card);
+    text-align: center;
+    transition: border-color 0.3s, box-shadow 0.3s;
+    position: relative;
+  }
+  .arch-node:hover {
+    border-color: var(--cyan);
+    box-shadow: 0 0 32px rgba(0, 192, 192, 0.1);
+  }
+  .arch-node .node-label {
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    margin-bottom: 0.3rem;
+  }
+  .arch-node .node-name {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: var(--text-primary);
+  }
+  .arch-node.highlight {
+    border-color: var(--amber);
+    background: rgba(232, 164, 32, 0.05);
+  }
+  .arch-node.highlight:hover {
+    border-color: var(--amber);
+    box-shadow: 0 0 32px rgba(232, 164, 32, 0.15);
+  }
+  .arch-arrow {
+    font-family: var(--font-mono);
+    font-size: 1.5rem;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+  .arch-arrow.down { display: none; }
+  .arch-detail {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.5rem;
+    margin-top: 2rem;
+  }
+  .arch-detail-card {
+    border-left: 2px solid var(--border);
+    padding: 1rem 0 1rem 1.5rem;
+    transition: border-color 0.3s;
+  }
+  .arch-detail-card:hover { border-color: var(--cyan); }
+  .arch-detail-card h4 {
+    font-family: var(--font-display);
+    font-size: 1.1rem;
+    font-weight: 400;
+    margin-bottom: 0.5rem;
+    letter-spacing: 0.04em;
+  }
+  .arch-detail-card p {
+    font-family: var(--font-body);
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    line-height: 1.9;
+  }
+
+  /* ── Tech specs table ─────────────────────── */
+  .specs-table {
+    max-width: 720px;
+    margin: 0 auto;
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .specs-table tr {
+    border-bottom: 1px solid var(--border);
+  }
+  .specs-table tr:last-child { border-bottom: none; }
+  .specs-table td {
+    padding: 1.2rem 0.5rem;
+    font-family: var(--font-body);
+    font-size: 0.9rem;
+  }
+  .specs-table td:first-child {
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    width: 160px;
+    letter-spacing: 0.04em;
+    font-size: 0.7rem;
+  }
+  .specs-table td:last-child {
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+  .specs-table .spec-tag {
+    display: inline-block;
+    padding: 0.2em 0.6em;
+    margin: 0.15em 0.3em;
+    font-size: 0.75rem;
+    font-family: var(--font-mono);
+    border: 1px solid var(--border-bright);
+    border-radius: 2px;
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+  }
+
+  /* ── Install section ──────────────────────── */
+  .install-section {
+    max-width: 700px;
+    margin: 0 auto;
+  }
+  .code-block {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    position: relative;
+    overflow-x: auto;
+  }
+  .code-block .prompt {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: var(--green);
+    user-select: none;
+    margin-right: 0.5rem;
+  }
+  .code-block code {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: var(--text-primary);
+    line-height: 1.8;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .code-label {
+    font-family: var(--font-body);
+    font-size: 0.75rem;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin-bottom: 0.5rem;
+  }
+
+  /* ── Footer ────────────────────────────────── */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 3rem 2rem;
+    text-align: center;
+  }
+  .footer-grid {
+    display: flex;
+    justify-content: center;
+    gap: 3rem;
+    flex-wrap: wrap;
+    margin-bottom: 2rem;
+  }
+  .footer-col {
+    text-align: left;
+  }
+  .footer-col h5 {
+    font-family: var(--font-body);
+    font-size: 0.75rem;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin-bottom: 0.8rem;
+    font-weight: 600;
+  }
+  .footer-col a {
+    font-family: var(--font-body);
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    text-decoration: none;
+    display: block;
+    margin-bottom: 0.4rem;
+    transition: color 0.2s;
+  }
+  .footer-col a:hover { color: var(--amber); }
+  .footer-copy {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    letter-spacing: 0.06em;
+  }
+
+  /* ── Reveal animations ────────────────────── */
+  .reveal {
+    opacity: 0;
+    transform: translateY(30px);
+    transition: opacity 0.8s cubic-bezier(0.22, 0.61, 0.36, 1),
+                transform 0.8s cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
+  .reveal.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  .reveal-delay-1 { transition-delay: 0.1s; }
+  .reveal-delay-2 { transition-delay: 0.2s; }
+  .reveal-delay-3 { transition-delay: 0.3s; }
+  .reveal-delay-4 { transition-delay: 0.4s; }
+
+  /* ── Decorative timeline stripe ───────────── */
+  .section-divider {
+    max-width: 200px;
+    height: 2px;
+    margin: 0 auto 4rem;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      var(--amber-dim) 20%,
+      var(--amber) 50%,
+      var(--amber-dim) 80%,
+      transparent
+    );
+    position: relative;
+  }
+  .section-divider::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--amber);
+    box-shadow: 0 0 8px var(--amber);
+  }
+  .section-divider.cyan {
+    background: linear-gradient(
+      90deg,
+      transparent,
+      var(--cyan-dim) 20%,
+      var(--cyan) 50%,
+      var(--cyan-dim) 80%,
+      transparent
+    );
+  }
+  .section-divider.cyan::after {
+    background: var(--cyan);
+    box-shadow: 0 0 8px var(--cyan);
+  }
+
+  /* ── Responsive ───────────────────────────── */
+  @media (max-width: 900px) {
+    .features-grid { grid-template-columns: 1fr; }
+    .arch-detail { grid-template-columns: 1fr; }
+    .arch-diagram { flex-direction: column; }
+    .arch-arrow { display: none; }
+    .arch-arrow.down { display: block; }
+    .hero-title { font-size: clamp(2.5rem, 12vw, 5rem); }
+    .hero::before { inset: 1rem; }
+    .hero-frameline { width: 20px; height: 20px; }
+    .hero-frameline.tl { top: 1rem; left: 1rem; }
+    .hero-frameline.tr { top: 1rem; right: 1rem; }
+    .hero-frameline.bl { bottom: 1rem; left: 1rem; }
+    .hero-frameline.br { bottom: 1rem; right: 1rem; }
+    nav { padding: 0 1rem; }
+    .nav-links { gap: 1rem; }
+    section { padding: 5rem 1.5rem; }
+    .specs-table td:first-child { width: 100px; }
+  }
+
+  /* ── Keyboard shortcut kbd ────────────────── */
+  kbd {
+    font-family: var(--font-mono);
+    font-size: 0.8em;
+    padding: 0.15em 0.45em;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-bright);
+    border-radius: 3px;
+    color: var(--text-primary);
+    box-shadow: 0 1px 0 var(--border);
+  }
+
+  /* ── Dark scrollbar ───────────────────────── */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg-deep); }
+  ::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+  /* ── Selection ────────────────────────────── */
+  ::selection {
+    background: rgba(232, 164, 32, 0.3);
+    color: var(--text-primary);
+  }
+</style>
+</head>
+<body>
+
+<!-- 胶片齿孔 -->
+<div class="film-perf" aria-hidden="true"></div>
+
+<!-- 导航 -->
+<nav>
+  <a href="#" class="nav-brand">
+    <span class="rec-dot" aria-hidden="true" title="录制指示灯（装饰）"></span>
+    dnclip
+  </a>
+  <ul class="nav-links">
+    <li><a href="#features">功能</a></li>
+    <li><a href="#how">架构</a></li>
+    <li><a href="#specs">参数</a></li>
+    <li><a href="#install">安装</a></li>
+    <li><a href="https://github.com/yinguobing/dnclip" target="_blank" rel="noopener">GitHub ↗</a></li>
+  </ul>
+</nav>
+
+<!-- 首屏 -->
+<header class="hero">
+  <div class="hero-frameline tl" aria-hidden="true"></div>
+  <div class="hero-frameline tr" aria-hidden="true"></div>
+  <div class="hero-frameline bl" aria-hidden="true"></div>
+  <div class="hero-frameline br" aria-hidden="true"></div>
+
+  <div class="hero-badge reveal">开源软件 · Linux 桌面</div>
+  <h1 class="hero-title reveal reveal-delay-1">dnclip</h1>
+  <p class="hero-tagline reveal reveal-delay-2">
+    <span>剪辑</span><span>转码</span><span>导入</span>
+  </p>
+  <p class="hero-subtitle reveal reveal-delay-3">
+    一款 Linux 桌面视频剪辑工具。导出 DNxHD/DNxHR 格式，
+    直接导入 DaVinci Resolve，无缝衔接你的剪辑流程。
+  </p>
+  <div class="timecode reveal reveal-delay-3" id="timecode" aria-live="off">
+    00:00:00<span class="frames">:00</span>
+  </div>
+  <div class="hero-cta reveal reveal-delay-4">
+    <a href="https://github.com/yinguobing/dnclip" class="btn btn-primary" target="_blank" rel="noopener">查看 GitHub</a>
+    <a href="#install" class="btn btn-secondary">安装指南</a>
+  </div>
+</header>
+
+<!-- 功能特性 -->
+<section id="features">
+  <div class="section-label reveal">01 · 功能特性</div>
+  <h2 class="section-title reveal">为 Resolve 工作流<br>量身打造</h2>
+  <p class="section-desc reveal">
+    每个功能都精准解决 DaVinci Resolve Free 在 Linux
+    平台上的实际痛点。不多不少，恰到好处。
+  </p>
+
+  <div class="features-grid">
+    <div class="feature-card reveal reveal-delay-1">
+      <div class="feature-number">01</div>
+      <h3>mpv 视频预览</h3>
+      <p>
+        mpv 视频输出通过 X11 子窗口直接嵌入 GUI 界面。
+        完整的播放控制，支持逐帧精确步进——跳转、拖拽、
+        单帧微调，一气呵成。
+      </p>
+    </div>
+    <div class="feature-card reveal reveal-delay-2">
+      <div class="feature-number">02</div>
+      <h3>键盘优先操作</h3>
+      <p>
+        播放过程中按 <kbd>I</kbd> 标记入点、<kbd>O</kbd> 标记出点。
+        每次按 <kbd>O</kbd> 自动捕获片段。批量剪辑，
+        双手无需离开键盘。
+      </p>
+    </div>
+    <div class="feature-card reveal reveal-delay-3">
+      <div class="feature-number">03</div>
+      <h3>DNxHD / DNxHR 导出</h3>
+      <p>
+        仅转码你需要的片段。ffmpeg 支持 LB、SQ、HQ、HQX
+        四种 DNx 编码配置。输出 .mov 文件，DaVinci Resolve
+        原生支持，直接导入。
+      </p>
+    </div>
+    <div class="feature-card reveal reveal-delay-2">
+      <div class="feature-number">04</div>
+      <h3>片段管理</h3>
+      <p>
+        从同一源文件中截取多个出入点范围。侧边栏中查看
+        每个片段的起止时间和时长。导出前可随时移除
+        不需要的片段。
+      </p>
+    </div>
+    <div class="feature-card reveal reveal-delay-3">
+      <div class="feature-number">05</div>
+      <h3>拖放打开</h3>
+      <p>
+        将视频文件拖入预览区域即可打开，或使用
+        <kbd>Ctrl+O</kbd> 调用原生文件对话框。
+        支持 mp4、mov、mkv、avi、webm、mts 等主流格式。
+      </p>
+    </div>
+    <div class="feature-card reveal reveal-delay-4">
+      <div class="feature-number">06</div>
+      <h3>智能导出命名</h3>
+      <p>
+        输出文件自动以源文件名和片段时间戳命名。
+        若文件已存在，导出前会弹出提示，
+        避免意外覆盖。
+      </p>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider" aria-hidden="true"></div>
+
+<!-- 工作原理 -->
+<section id="how">
+  <div class="arch-section">
+    <div class="section-label reveal">02 · 系统架构</div>
+    <h2 class="section-title reveal">三个进程，<br>一条无缝管线</h2>
+    <p class="section-desc reveal">
+      dnclip 通过统一的 Rust 图形界面，将三个久经考验的
+      工具串联起来——各司其职，协同工作。
+    </p>
+
+    <div class="arch-diagram reveal">
+      <div class="arch-node">
+        <div class="node-label">图形界面层</div>
+        <div class="node-name">egui + eframe</div>
+      </div>
+      <span class="arch-arrow">→</span>
+      <span class="arch-arrow down">↓</span>
+      <div class="arch-node highlight">
+        <div class="node-label">播放引擎</div>
+        <div class="node-name">mpv</div>
+      </div>
+      <span class="arch-arrow">→</span>
+      <span class="arch-arrow down">↓</span>
+      <div class="arch-node">
+        <div class="node-label">编码器</div>
+        <div class="node-name">ffmpeg</div>
+      </div>
+    </div>
+
+    <div class="arch-detail">
+      <div class="arch-detail-card reveal reveal-delay-1">
+        <h4>egui 渲染界面</h4>
+        <p>
+          Rust 语言的即时模式 GUI。时间轴滑块、走带控件、
+          片段列表和导出面板——全部以原生速度渲染，
+          资源占用极低。
+        </p>
+      </div>
+      <div class="arch-detail-card reveal reveal-delay-2">
+        <h4>mpv 解码与渲染</h4>
+        <p>
+          作为子进程启动，通过 X11 窗口重定父级嵌入 egui
+          窗口。通过 Unix 套接字使用 JSON IPC 进行控制——
+          播放、暂停、跳转、逐帧、查询属性。
+        </p>
+      </div>
+      <div class="arch-detail-card reveal reveal-delay-3">
+        <h4>ffmpeg 编码输出</h4>
+        <p>
+          每次导出时调用，精确传递 <code>-ss</code> 和
+          <code>-t</code> 参数。编码为 DNxHD/DNxHR 视频
+          加 PCM 音频，封装为 .mov 容器——Resolve 即开即用。
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider cyan" aria-hidden="true"></div>
+
+<!-- 技术规格 -->
+<section id="specs">
+  <div class="section-label reveal">03 · 技术规格</div>
+  <h2 class="section-title reveal" style="text-align:center">技术参数</h2>
+
+  <table class="specs-table reveal">
+    <tbody>
+      <tr>
+        <td>开发语言</td>
+        <td>Rust（2021 版）—— 6 个源文件，共 1,411 行代码</td>
+      </tr>
+      <tr>
+        <td>GUI 框架</td>
+        <td>egui 0.34 + eframe 运行时</td>
+      </tr>
+      <tr>
+        <td>视频播放</td>
+        <td>mpv，通过 X11 子窗口嵌入 + JSON IPC 通信</td>
+      </tr>
+      <tr>
+        <td>导出编码</td>
+        <td>ffmpeg CLI —— DNxHD/DNxHR 配置：LB、SQ、HQ、HQX</td>
+      </tr>
+      <tr>
+        <td>输出格式</td>
+        <td>QuickTime .mov —— DNx 视频 + PCM 16-bit 音频</td>
+      </tr>
+      <tr>
+        <td>窗口系统</td>
+        <td>X11（x11-dl）实现原生子窗口嵌入</td>
+      </tr>
+      <tr>
+        <td>序列化</td>
+        <td>serde + serde_json 处理 mpv IPC 协议</td>
+      </tr>
+      <tr>
+        <td>文件对话框</td>
+        <td>rfd（原生）+ egui-file-dialog（GUI 内嵌）</td>
+      </tr>
+      <tr>
+        <td>打包方式</td>
+        <td>cargo-deb，含 .desktop 启动项与应用图标</td>
+      </tr>
+      <tr>
+        <td>输入格式</td>
+        <td>
+          <span class="spec-tag">mp4</span>
+          <span class="spec-tag">mov</span>
+          <span class="spec-tag">mkv</span>
+          <span class="spec-tag">avi</span>
+          <span class="spec-tag">webm</span>
+          <span class="spec-tag">mts</span>
+          <span class="spec-tag">m2ts</span>
+          <span class="spec-tag">ts</span>
+          <span class="spec-tag">flv</span>
+          <span class="spec-tag">wmv</span>
+        </td>
+      </tr>
+      <tr>
+        <td>开源协议</td>
+        <td>MIT</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<div class="section-divider" aria-hidden="true"></div>
+
+<!-- 安装 -->
+<section id="install">
+  <div class="install-section">
+    <div class="section-label reveal">04 · 快速开始</div>
+    <h2 class="section-title reveal">安装指南</h2>
+
+    <div class="reveal">
+      <div class="code-label">系统依赖</div>
+      <div class="code-block">
+        <code># Ubuntu / Debian
+sudo apt install mpv ffmpeg libx11-dev</code>
+      </div>
+    </div>
+
+    <div class="reveal reveal-delay-1">
+      <div class="code-label">使用 Cargo 安装</div>
+      <div class="code-block">
+        <code><span class="prompt">$</span> cargo install dnclip</code>
+      </div>
+    </div>
+
+    <div class="reveal reveal-delay-2">
+      <div class="code-label">或从源码编译</div>
+      <div class="code-block">
+        <code><span class="prompt">$</span> git clone https://github.com/yinguobing/dnclip.git
+<span class="prompt">$</span> cd dnclip
+<span class="prompt">$</span> cargo build --release
+<span class="prompt">$</span> ./target/release/dnclip</code>
+      </div>
+    </div>
+
+    <div class="reveal reveal-delay-3" style="text-align:center; margin-top:2rem;">
+      <a href="https://github.com/yinguobing/dnclip" class="btn btn-primary" target="_blank" rel="noopener">前往 GitHub →</a>
+    </div>
+  </div>
+</section>
+
+<!-- 页脚 -->
+<footer>
+  <div class="footer-grid">
+    <div class="footer-col">
+      <h5>项目</h5>
+      <a href="https://github.com/yinguobing/dnclip" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/yinguobing/dnclip/blob/master/README.md" target="_blank" rel="noopener">README</a>
+      <a href="https://github.com/yinguobing/dnclip/blob/master/LICENSE" target="_blank" rel="noopener">开源协议（MIT）</a>
+    </div>
+    <div class="footer-col">
+      <h5>作者</h5>
+      <a href="mailto:yinguobing@gmail.com">yinguobing</a>
+    </div>
+    <div class="footer-col">
+      <h5>技术栈</h5>
+      <a href="https://www.rust-lang.org/" target="_blank" rel="noopener">Rust</a>
+      <a href="https://www.egui.rs/" target="_blank" rel="noopener">egui</a>
+      <a href="https://mpv.io/" target="_blank" rel="noopener">mpv</a>
+      <a href="https://ffmpeg.org/" target="_blank" rel="noopener">ffmpeg</a>
+    </div>
+  </div>
+  <p class="footer-copy">dnclip · MIT License</p>
+</footer>
+
+<script>
+  // ── 实时时码显示 ──────────────────────────
+  (function timecode() {
+    var el = document.getElementById('timecode');
+    function tick() {
+      var now = new Date();
+      var h = String(now.getHours()).padStart(2, '0');
+      var m = String(now.getMinutes()).padStart(2, '0');
+      var s = String(now.getSeconds()).padStart(2, '0');
+      var f = String(Math.floor(now.getMilliseconds() / 40)).padStart(2, '0');
+      el.innerHTML = h + ':' + m + ':' + s + '<span class="frames">:' + f + '</span>';
+      requestAnimationFrame(function() { setTimeout(tick, 40); });
+    }
+    tick();
+  })();
+
+  // ── 滚动触发渐现动画 ──────────────────────
+  (function revealOnScroll() {
+    var observer = new IntersectionObserver(
+      function(entries) {
+        entries.forEach(function(entry) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('visible');
+          }
+        });
+      },
+      { threshold: 0.15, rootMargin: '0px 0px -40px 0px' }
+    );
+
+    document.querySelectorAll('.reveal').forEach(function(el) { observer.observe(el); });
+  })();
+</script>
+</body>
+</html>
